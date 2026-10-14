@@ -46,7 +46,7 @@
 - 如果你的网络对某个 Cloudflare IP 更差，手动填写错误 IP 可能导致下载更慢或失败
 
 ## 本地构建
-
+请自行调整osu源码路径或者已安装lazer的路径
 ```powershell
 dotnet build .\osu.Game.Rulesets.BeatmapAccel\osu.Game.Rulesets.BeatmapAccel.csproj -c Release
 ```
