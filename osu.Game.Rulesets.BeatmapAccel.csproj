@@ -1,0 +1,81 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    BeatmapAccel ruleset 工程（适配 osu!lazer 2026.1005.0-lazer / ruleset API 2026.818.0）
+
+    两种编译模式：
+
+    1) 【默认】引用已安装 osu!lazer 客户端自带的程序集（推荐）
+       - 编译目标与运行环境 100% 一致，不会出现 MissingMethodException
+       - 不需要 osu 源码，几秒钟即可编完
+       - 路径自动探测 %LOCALAPPDATA%\osulazer\current
+       - 可用 -p:OsuLazerDir=xxx 手动指定
+
+    2) 【源码模式】引用 osu 源码里的 osu.Game 工程
+       - 需要 up-to-date 的 ppy/osu 源码
+       - 用法：dotnet build -p:OsuUseSource=true -p:OsuSourceDir=D:\osu
+       - 注意：此模式编出来的 dll 只能配合相同版本的 osu!lazer 使用
+
+    不要修改 osu 主工程：两种模式都只读取 osu，不会写入。
+  -->
+
+  <PropertyGroup Label="Project">
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyTitle>osu.Game.Rulesets.BeatmapAccel</AssemblyTitle>
+    <OutputType>Library</OutputType>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <RootNamespace>osu.Game.Rulesets.BeatmapAccel</RootNamespace>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <!-- 产物直接落在 bin/Release 下，方便直接丢进 rulesets 目录 -->
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <!-- 不要复制 osu.Game/osu.Framework 等依赖，ruleset 目录只放一个 dll -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Reference mode">
+    <OsuUseSource Condition="'$(OsuUseSource)' == ''">false</OsuUseSource>
+    <OsuLazerDir Condition="'$(OsuLazerDir)' == ''">$(LOCALAPPDATA)\osulazer\current</OsuLazerDir>
+    <OsuSourceDir Condition="'$(OsuSourceDir)' == ''">$(MSBuildThisFileDirectory)..\osu</OsuSourceDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\**\*" />
+  </ItemGroup>
+
+  <!-- 源码模式 -->
+  <ItemGroup Condition="'$(OsuUseSource)' == 'true'">
+    <ProjectReference Include="$(OsuSourceDir)\osu.Game\osu.Game.csproj" />
+  </ItemGroup>
+
+  <!-- 默认模式：引用已安装客户端的程序集 -->
+  <ItemGroup Condition="'$(OsuUseSource)' != 'true'">
+    <Reference Include="osu.Game">
+      <HintPath>$(OsuLazerDir)\osu.Game.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="osu.Framework">
+      <HintPath>$(OsuLazerDir)\osu.Framework.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="osuTK">
+      <HintPath>$(OsuLazerDir)\osuTK.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Realm">
+      <HintPath>$(OsuLazerDir)\Realm.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(OsuLazerDir)\Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- 编译前校验引用是否存在，报错信息比 MSBuild 默认的清楚 -->
+  <Target Name="ValidateOsuReference" BeforeTargets="ResolveAssemblyReferences" Condition="'$(OsuUseSource)' != 'true'">
+    <Error Condition="!Exists('$(OsuLazerDir)\osu.Game.dll')"
+           Text="找不到 osu.Game.dll。请确认已安装 osu!lazer，或用 -p:OsuLazerDir=&quot;你的 osu!.exe 所在目录&quot; 指定路径（当前探测路径：$(OsuLazerDir)）。" />
+  </Target>
+
+</Project>
