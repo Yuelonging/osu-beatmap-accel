@@ -20,7 +20,7 @@
 
 - 在 GitHub 右侧 `Releases` 下载最新发布文件
 - 方式一：将文件中的osu.Game.Rulesets.BeatmapAccel.dll文件直接放在osu文件夹的rulset文件内
-- 方式二：本地构建，请下载最新的osu源码(https://github.com/ppy/osu)然后进行编译，编译命令参见本地构建章节，最后将生成的.dll文件放在osu文件夹的rulset文件内
+- 方式二：本地构建，请下载最新的osu源码 (https://github.com/ppy/osu) 然后进行编译，编译命令参见本地构建章节，最后将生成的.dll文件放在osu文件夹的rulset文件内
 
 ## 模式说明
 
