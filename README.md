@@ -19,8 +19,8 @@
 ## 安装
 
 - 在 GitHub 右侧 `Releases` 下载最新发布文件
-- 解压后，将生成的文件放到 `osu!lazer` 的 ruleset 目录
-- 如果你是本地构建，也可以直接使用生成的 `dll`
+- 方式一：将文件中的osu.Game.Rulesets.BeatmapAccel.dll文件直接放在osu文件夹的rulset文件内
+- 方式二：本地构建，请下载最新的osu源码(https://github.com/ppy/osu)然后进行编译，编译命令参见本地构建章节，最后将生成的.dll文件放在osu文件夹的rulset文件内
 
 ## 模式说明
 
@@ -46,7 +46,7 @@
 - 如果你的网络对某个 Cloudflare IP 更差，手动填写错误 IP 可能导致下载更慢或失败
 
 ## 本地构建
-请自行调整osu源码路径或者已安装lazer的路径
+请打开osu.Game.Rulesets.BeatmapAccel.csproj调整osu源码路径或者已安装lazer的路径，不会调整请咨询chatgpt或者大肥鱼
 ```powershell
 dotnet build .\osu.Game.Rulesets.BeatmapAccel\osu.Game.Rulesets.BeatmapAccel.csproj -c Release
 ```
