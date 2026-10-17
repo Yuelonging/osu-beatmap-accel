@@ -1,9 +1,8 @@
-# Changelog — v1.2.1
+# Changelog — v1.1.1
 
-## [v1.2.1]
+## [v1.1.1]
 
-修复「高并发 / 大谱面下载中途静默中断」。这是 v1.2.0 的 bug 修复版本，
-**不包含** v1.1.0 的多人游戏代理。
+修复「高并发 / 大谱面下载中途静默中断」。这是 v1.1.0 的 bug 修复版本，
 
 仍然不改动 osu! 主工程任何一个文件。
 
@@ -20,7 +19,7 @@
   进度回调每收到数据就重置计时器；另设 **15 分钟**绝对上限防止僵尸连接永久占坑。
 
 - **超时不再被当作「用户取消」静默吞掉**
-  v1.2.0 里超时抛 `OperationCanceledException`，
+  v1.1.0 里超时抛 `OperationCanceledException`，
   `request.Failure` 中 `if (error is OperationCanceledException) return;` 直接返回，
   导致 **既不写日志、也不触发失败恢复测速**（日志中 `[DIAG]` 与
   `Beatmap download failed` 均为 0 条，但 15 个任务凭空消失）。
