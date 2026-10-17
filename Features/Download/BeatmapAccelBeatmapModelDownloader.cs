@@ -124,6 +124,16 @@ public partial class BeatmapAccelBeatmapModelDownloader
 
             BeatmapAccelLogging.LogError(error, $"Beatmap download failed for set {request.Model.OnlineID}");
 
+            // 超时以前和"用户取消"共用 OperationCanceledException，被上面那行直接吞掉：
+            // 既不写日志、也不触发恢复测速。现在拆成独立类型，能走到这里。
+            if (error is PreferredIpDownloadTimeoutException)
+            {
+                PostNotification?.Invoke(new SimpleNotification
+                {
+                    Text = $"BeatmapAccel: 谱面 {request.Model.OnlineID} 下载超时（{error.Message}），正在重新测速选择线路。"
+                });
+            }
+
             if (isNonRecoverableDownloadFailure(error))
             {
                 BeatmapAccelLogging.Log($"Skipping preferred-IP recovery for non-recoverable beatmap download failure on set {request.Model.OnlineID}: {error.Message}");
@@ -228,7 +238,18 @@ public partial class BeatmapAccelBeatmapModelDownloader
     private sealed class PreferredIpDownloadBeatmapSetRequest : ArchiveDownloadRequest<IBeatmapSetInfo>
     {
         private const string download_host = "osu.ppy.sh";
-        private static readonly TimeSpan download_timeout = TimeSpan.FromSeconds(60);
+
+        /// <summary>
+        /// 空闲超时：连续这么久没有收到任何新字节，才判定链路已经死掉。
+        /// 以前这里是一个 60 秒的"总时长"超时，会把"慢但仍在稳定传输"的大谱面直接砍断——
+        /// 实测完成的下载耗时上限正好卡在 58.6 秒，越过 60 秒的全部消失。
+        /// </summary>
+        private static readonly TimeSpan download_stall_timeout = TimeSpan.FromSeconds(30);
+
+        /// <summary>
+        /// 绝对上限：防止极端情况下（每秒都有几个字节进账）单个下载无限挂住。
+        /// </summary>
+        private static readonly TimeSpan download_hard_timeout = TimeSpan.FromMinutes(15);
 
         private readonly bool noVideo;
         private readonly IAPIProvider api;
@@ -280,10 +301,21 @@ public partial class BeatmapAccelBeatmapModelDownloader
 
         private async Task downloadAsync()
         {
+            // 三层计时器：
+            //   stallTimeout —— 空闲超时，每收到一批新字节就重置（真正的"链路死了"判据）
+            //   hardTimeout  —— 绝对上限，防止每秒挤几个字节的僵尸连接永久占位
+            //   requestTimeout —— 两者与用户取消的并集，交给 HTTP 层
+            using var stallTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationSource.Token);
+            using var hardTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationSource.Token);
+            using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(stallTimeout.Token, hardTimeout.Token);
+
             try
             {
-                using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationSource.Token);
-                requestTimeout.CancelAfter(download_timeout);
+                // 下载并发不给任何上限：用户想一次拖 20 个就拖 20 个。
+                // 带宽被摊薄只会让每个下载变慢，而"慢"本身在空闲超时机制下是安全的，
+                // 只要还在进字节就不会被判死。
+                stallTimeout.CancelAfter(download_stall_timeout);
+                hardTimeout.CancelAfter(download_hard_timeout);
 
                 await runtime.DownloadFileAsync(new PreferredIpFileDownloadRequest(
                     new System.Uri(this.Uri),
@@ -296,7 +328,10 @@ public partial class BeatmapAccelBeatmapModelDownloader
                         if (Interlocked.Exchange(ref firstProgressLogged, 1) == 0)
                             BeatmapAccelLogging.Log($"Preferred-IP download received first progress for beatmap set {Model.OnlineID} after {stopwatch.ElapsedMilliseconds} ms.");
 
-                        // [临时诊断] 记录最后进度，用于失败时判断"传到一半"的确切字节位置。
+                        // 只要还有新字节进来，就说明链路活着 —— 重置空闲计时器。
+                        // 这是本次修复的核心：慢但持续的下载不再被误杀。
+                        resetStallTimeout(stallTimeout);
+
                         lastProgressBytes = currentBytes;
                         lastProgressTotal = totalBytes;
 
@@ -313,22 +348,60 @@ public partial class BeatmapAccelBeatmapModelDownloader
             }
             catch (Exception e)
             {
-                // [临时诊断] 仅对"非取消"的传输中断输出诊断（用户取消/总超时取消属预期行为，不刷屏）。
-                // 取消可能是 download_timeout(60s) 总超时或用户取消；非取消异常才是真正的传输中断。
-                bool tokenCancelled = cancellationSource.IsCancellationRequested;
+                bool userCancelled = cancellationSource.IsCancellationRequested;
+                bool stalled = !userCancelled && stallTimeout.IsCancellationRequested;
+                bool hardExpired = !userCancelled && hardTimeout.IsCancellationRequested;
+                bool timedOut = stalled || hardExpired;
 
-                if (!tokenCancelled && e is not OperationCanceledException)
+                // 用户主动取消才是预期行为，不刷日志；
+                // 停滞/超时和真实异常都必须留下痕迹——以前超时被当成取消静默吞掉，
+                // 导致"下载进度条突然消失但日志里什么都没有"。
+                if (!userCancelled)
                 {
-                    string typeChain = BeatmapAccelLogging.BuildExceptionTypeChain(e);
+                    string reason = timedOut
+                        ? (stalled
+                            ? $"stalled for {download_stall_timeout.TotalSeconds:F0}s without receiving new bytes"
+                            : $"exceeded hard limit of {download_hard_timeout.TotalMinutes:F0} min")
+                        : $"Type={BeatmapAccelLogging.BuildExceptionTypeChain(e)}, Message={e.Message}";
 
                     BeatmapAccelLogging.Log($"[DIAG] Download aborted for set {Model.OnlineID} after {stopwatch.ElapsedMilliseconds} ms. " +
-                                            $"Type={typeChain}, Message={e.Message}, " +
-                                            $"lastBytes={lastProgressBytes}, lastTotal={(lastProgressTotal?.ToString() ?? "<null>")}, " +
+                                            $"Reason={reason}, lastBytes={lastProgressBytes}, lastTotal={(lastProgressTotal?.ToString() ?? "<null>")}, " +
                                             $"preferredIp={(string.IsNullOrWhiteSpace(preferredIp) ? "<empty>" : preferredIp)}.", LogLevel.Important);
                 }
 
                 cleanupTargetFile();
+
+                if (timedOut)
+                {
+                    // 用专门类型而不是 OperationCanceledException：
+                    // 上层 Failure 处理器会把 OperationCanceledException 当作"用户取消"直接 return，
+                    // 那样就永远不会触发失败恢复测速。
+                    Fail(new PreferredIpDownloadTimeoutException(
+                        $"Preferred-IP download for beatmap set {Model.OnlineID} " +
+                        $"{(stalled ? "stalled" : "exceeded hard time limit")} after {stopwatch.ElapsedMilliseconds} ms " +
+                        $"(lastBytes={lastProgressBytes}, lastTotal={lastProgressTotal?.ToString() ?? "unknown"})."));
+                    return;
+                }
+
                 Fail(e);
+            }
+        }
+
+        /// <summary>
+        /// 重置空闲超时。进度回调可能来自网络线程，也可能在下载主体已经结束时再被触发一次，
+        /// 此时 CTS 可能已释放；吞掉 ObjectDisposedException 即可，不影响已经结束的下载。
+        /// </summary>
+        private static void resetStallTimeout(CancellationTokenSource stallTimeout)
+        {
+            try
+            {
+                stallTimeout.CancelAfter(download_stall_timeout);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
             }
         }
 
@@ -362,5 +435,23 @@ public partial class BeatmapAccelBeatmapModelDownloader
             {
             }
         }
+    }
+}
+
+/// <summary>
+/// 优选 IP 下载超时（空闲超时或绝对上限）。
+/// 刻意不继承 <see cref="OperationCanceledException"/>：上层需要把"传输停滞"和"用户主动取消"
+/// 区分开，前者要写日志并触发重测速，后者才是静默预期行为。
+/// </summary>
+public sealed class PreferredIpDownloadTimeoutException : Exception
+{
+    public PreferredIpDownloadTimeoutException(string message)
+        : base(message)
+    {
+    }
+
+    public PreferredIpDownloadTimeoutException(string message, Exception innerException)
+        : base(message, innerException)
+    {
     }
 }

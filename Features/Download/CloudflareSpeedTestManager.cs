@@ -47,8 +47,13 @@ public static class CloudflareSpeedTestManager
     /// <summary>同一个落地节点最多送几个候选去做吞吐测速，避免把机会全花在一条绕远路径上。</summary>
     private const int max_per_colo_in_throughput_stage = 2;
 
-    /// <summary>吞吐测速每个候选最多拉取的数据量。取太小测不出带宽，太大浪费流量与时间。</summary>
-    private const int throughput_max_bytes = 512 * 1024;
+    /// <summary>
+    /// 吞吐测速每个候选最多拉取的数据量。
+    /// 512 KB 时测出的值严重虚高：同一 IP 实测 512 KB 样本 → 1526 KB/s，10 MB → 只有 383 KB/s（差 4 倍）。
+    /// 原因是小样本几乎全落在 TCP 慢启动后的突发窗口里，TTFB 也被摊得极薄。
+    /// 提高到 3 MB 让测量窗口至少覆盖数秒的稳定传输。
+    /// </summary>
+    private const int throughput_max_bytes = 3 * 1024 * 1024;
 
     /// <summary>少于这个字节数的吞吐测量视为无效（例如端点被限流只回了一个错误页）。</summary>
     private const long throughput_minimum_bytes = 32 * 1024;
@@ -56,7 +61,7 @@ public static class CloudflareSpeedTestManager
     /// <summary>吞吐测速端点：优先 Cloudflare 官方测速端点，退化到 osu 自己的 CDN。</summary>
     private static readonly string[] default_throughput_probe_urls =
     {
-        "https://speed.cloudflare.com/__down?bytes=524288",
+        "https://speed.cloudflare.com/__down?bytes=3145728",
         "https://b.ppy.sh/preview/1.mp3",
     };
 
@@ -66,7 +71,13 @@ public static class CloudflareSpeedTestManager
     /// <summary>缓存优选 IP 的有效期。</summary>
     private const int preferred_ip_cache_hours = 12;
 
-    private static readonly TimeSpan throughput_body_timeout = TimeSpan.FromSeconds(3.5);
+    /// <summary>
+    /// 吞吐测量的采集窗口上限。实际样本量 = min(throughput_max_bytes, 本值 × 实时吞吐)：
+    /// 慢链路靠时间兜住（4 秒 ≈ 1.5 MB @ 383 KB/s），快链路靠字节数兜住，
+    /// 两边都能拿到足够长的稳定传输窗口，而不是只测到一个突发尖峰。
+    /// </summary>
+    private static readonly TimeSpan throughput_body_timeout = TimeSpan.FromSeconds(4);
+
 
     private static readonly string[] cloudflare_priority_ipv4_ranges =
     {
